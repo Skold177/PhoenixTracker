@@ -1,6 +1,6 @@
 addon.name    = 'phoenixtracker';
 addon.author  = 'Skold, Grimwald, Slowed';
-addon.version = '2.0';
+addon.version = '2.0.1';
 addon.desc    = 'Tracks Phoenix fishing, chocobo digging, harvesting, logging, mining, and excavation.';
 addon.link    = 'https://phoenix-xi.com/';
 
@@ -363,7 +363,9 @@ end
 -- Commands
 -----------------------------------
 -- Activity commands go straight to their tab; /ptrack works on whichever tab is open.
-local COMMANDS = T{
+-- Plain tables, not T{}: looking up "last" in a T{} returns the table.last function, so chat
+-- starting with "last" would be mistaken for a command, and "/ptrack sort" for a tab.
+local COMMANDS = {
     ['/pfish']     = fishing,
     ['/pdig']      = digging,
     ['/pharvest']  = harvesting,
@@ -371,8 +373,6 @@ local COMMANDS = T{
     ['/pmine']     = mining,
     ['/pexcavate'] = excavation,
 };
--- A plain table, not T{}: looking up "sort" in a T{} returns the table.sort function, so
--- "/ptrack sort" would be mistaken for a tab.
 local TAB_WORDS = {
     fish = fishing, fishing = fishing, dig = digging, digging = digging,
     harvest = harvesting, harvesting = harvesting, mine = mining, mining = mining,

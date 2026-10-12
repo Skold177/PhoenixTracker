@@ -43,6 +43,13 @@ class TrackerIntegrationTests(unittest.TestCase):
         self.assertEqual(self.h.settings.tab, 'fish')
         self.assertIn('/ptrack - show or hide the window', self.h.messages)
 
+    def test_chat_starting_with_a_table_method_name_is_left_alone(self):
+        # Plain chat reaches the command event too, and the stub's T{} answers to concat.
+        for text in ('concat', 'concat the party'):
+            with self.subTest(text=text):
+                self.assertFalse(self.command(text).blocked)
+        self.assertEqual(self.h.messages, [])
+
     def test_scale_rejects_a_value_that_is_not_a_number(self):
         self.command('/ptrack scale nan')
         self.assertEqual(self.h.settings.scale, 1.0)
