@@ -1,5 +1,6 @@
--- Shared look for every PhoenixTracker tab. The palette and style values are Skold's, from
--- PhoenixFishTrack, so every tab draws with exactly the same colours.
+-- Shared look for every PhoenixTracker tab: the themes, and the helpers every tab draws with.
+-- Tabs read colours from ui.COLOR by name. A theme refills that table in place, so a tab never
+-- needs to know which theme is showing.
 require('common');
 
 local chat  = require('chat');
@@ -22,28 +23,450 @@ end
 
 local rgb = ui.rgb;
 
-ui.COLOR = T{
-    abyss     = rgb('180e0e'),
-    surface1  = rgb('291c1c'),
-    surface2  = rgb('321f1f'),
-    border    = rgb('d2abab', 0.20),
-    subtle    = rgb('d2abab', 0.12),
-    text      = rgb('fff8f8'),
-    secondary = rgb('eae1e1'),
-    peach     = rgb('d2abab'),
-    muted     = rgb('8a6b6b'),
-    faint     = rgb('5a4545'),
-    royal     = rgb('c55151'),
-    tint      = rgb('c55151', 0.30),
-    hover     = rgb('d45e5e'),
-    ember     = rgb('ff8d79'),
-    danger    = rgb('e04040'),
-    gold      = rgb('c5a131'),
-    success   = rgb('63ba8a'),
-    clear     = { 0, 0, 0, 0 },
+local function fade(color, alpha)
+    return { color[1], color[2], color[3], alpha };
+end
+
+local function shade(color, factor, alpha)
+    return { color[1] * factor, color[2] * factor, color[3] * factor, alpha or 1 };
+end
+
+local function lighten(color, amount)
+    return {
+        color[1] + (1 - color[1]) * amount,
+        color[2] + (1 - color[2]) * amount,
+        color[3] + (1 - color[3]) * amount,
+        1,
+    };
+end
+
+-----------------------------------
+-- Themes
+-----------------------------------
+-- Every theme fills the same names:
+--   abyss      window background, and dark text on a filled banner
+--   surface1   title bar, popups and alternate table rows
+--   surface2   input boxes and the empty part of a bar
+--   button, button_hover   an off toggle button and its hover state
+--   border, subtle   window and table lines
+--   text, secondary, muted, faint   text from brightest to dimmest
+--   peach      the character name and other headline text
+--   royal, hover, tint   an on toggle button, filled bars, and their hover states
+--   ember      a highlighted number or countdown
+--   danger, gold, success   bad, notable and good
+-- style holds the corner rounding, which Classic squares off to match the game's windows. A theme
+-- can also set imgui (ImGui colours by ImGuiCol_ name, on top of the ones built from the palette)
+-- and vars (ImGui style sizes by ImGuiStyleVar_ name).
+
+-- Skold's original palette, after phoenix-xi.com.
+local function phoenix_theme()
+    return {
+        palette = {
+            abyss     = rgb('180e0e'),
+            surface1  = rgb('291c1c'),
+            surface2  = rgb('321f1f'),
+            border    = rgb('d2abab', 0.20),
+            subtle    = rgb('d2abab', 0.12),
+            text      = rgb('fff8f8'),
+            secondary = rgb('eae1e1'),
+            peach     = rgb('d2abab'),
+            muted     = rgb('8a6b6b'),
+            faint     = rgb('5a4545'),
+            button       = rgb('321f1f'),
+            button_hover = rgb('c55151', 0.30),
+            royal     = rgb('c55151'),
+            tint      = rgb('c55151', 0.30),
+            hover     = rgb('d45e5e'),
+            ember     = rgb('ff8d79'),
+            danger    = rgb('e04040'),
+            gold      = rgb('c5a131'),
+            success   = rgb('63ba8a'),
+        },
+        style = { window = 8.0, frame = 4.0 },
+    };
+end
+
+-- Dark grey with a blue accent, for anyone who'd rather not have red on red.
+local function neutral_theme()
+    return {
+        palette = {
+            abyss     = rgb('16171b'),
+            surface1  = rgb('222329'),
+            surface2  = rgb('2c2e35'),
+            border    = rgb('c8ccd6', 0.18),
+            subtle    = rgb('c8ccd6', 0.10),
+            text      = rgb('f2f3f5'),
+            secondary = rgb('d9dbe0'),
+            peach     = rgb('a9c4f5'),
+            muted     = rgb('8b8f99'),
+            faint     = rgb('5b5e66'),
+            button       = rgb('2c2e35'),
+            button_hover = rgb('3f6fb8', 0.30),
+            royal     = rgb('3f6fb8'),
+            tint      = rgb('3f6fb8', 0.30),
+            hover     = rgb('4c7ec9'),
+            ember     = rgb('f2b366'),
+            danger    = rgb('e05a5a'),
+            gold      = rgb('d4b44a'),
+            success   = rgb('63ba8a'),
+        },
+        style = { window = 8.0, frame = 4.0 },
+    };
+end
+
+-- The background and frame colour of each in-game Window Type (0 is Type 1), sampled from the
+-- game's art by Frankie-hz for craftbook. The flat parts of the window are built from these so
+-- they sit on the art, and they stand in for the art if it can't be read.
+local WINDOW_ART = {
+    [0] = { background = rgb('282452'), frame = rgb('888988') },
+    [1] = { background = rgb('5d5c6f'), frame = rgb('9698a6') },
+    [2] = { background = rgb('23204d'), frame = rgb('888988') },
+    [3] = { background = rgb('2b2b2b'), frame = rgb('9698a6') },
+    [4] = { background = rgb('626262'), frame = rgb('888988') },
+    [5] = { background = rgb('001948'), frame = rgb('5a4418') },
+    [6] = { background = rgb('9e8f64'), frame = rgb('867953') },
+    [7] = { background = rgb('1c353f'), frame = rgb('314e57') },
 };
 
-local COLOR = ui.COLOR;
+-- The middle of the top-down shading the art is drawn with.
+local ART_SHADE = 0.62;
+
+-- The game's own window look, following Config > Windows > Shared > Window Type. The colours and
+-- sizes are craftbook's Classic theme, so the controls sit on the art the same way: buttons are a
+-- see-through tint of the frame colour, input boxes a dark inset, the title bar solid.
+local function classic_theme(window_type)
+    local art    = WINDOW_ART[window_type] or WINDOW_ART[0];
+    local panel  = shade(art.background, ART_SHADE);
+    local accent = lighten(art.frame, 0.25);
+    local light  = lighten(art.frame, 0.60);
+    local text   = { 0.96, 0.96, 0.93, 1 };
+    local inset  = { 0, 0, 0, 0.34 };
+    return {
+        palette = {
+            abyss        = panel,
+            surface1     = shade(panel, 0.80),
+            surface2     = inset,
+            border       = fade(accent, 0.55),
+            subtle       = fade(accent, 0.25),
+            text         = text,
+            secondary    = { 0.88, 0.88, 0.85, 1 },
+            peach        = { 1.00, 0.87, 0.48, 1 },
+            muted        = { 0.72, 0.72, 0.70, 1 },
+            faint        = { 0.56, 0.56, 0.55, 1 },
+            -- Unselected toggle buttons darken the art, so their labels stand out and the selected
+            -- one (royal) reads as lit.
+            button       = { 0, 0, 0, 0.38 },
+            button_hover = fade(accent, 0.30),
+            royal        = fade(accent, 0.66),
+            tint         = fade(accent, 0.24),
+            hover        = fade(accent, 0.80),
+            ember        = { 0.98, 0.82, 0.38, 1 },
+            danger       = { 1.00, 0.52, 0.46, 1 },
+            gold         = { 1.00, 0.87, 0.48, 1 },
+            success      = { 0.52, 0.90, 0.52, 1 },
+        },
+        style = { window = 0.0, frame = 2.0 },
+        -- Unselected button labels. Muted grey on the grey-tinted buttons was too hard to read over
+        -- the art, so they sit just below the selected label instead.
+        off_label = { 0.86, 0.86, 0.83, 1 },
+        imgui = {
+            TitleBg              = shade(panel, 0.80),
+            TitleBgActive        = shade(panel, 1.05),
+            TitleBgCollapsed     = shade(panel, 0.80, 0.90),
+            PopupBg              = shade(panel, 0.85, 0.98),
+            Border               = fade(accent, 0.55),
+            Separator            = fade(accent, 0.50),
+            TextDisabled         = { 0.72, 0.72, 0.70, 1 },
+            FrameBg              = inset,
+            FrameBgHovered       = fade(accent, 0.24),
+            FrameBgActive        = fade(accent, 0.36),
+            Button               = fade(accent, 0.30),
+            ButtonHovered        = fade(accent, 0.48),
+            ButtonActive         = fade(accent, 0.66),
+            Header               = fade(accent, 0.30),
+            HeaderHovered        = fade(accent, 0.44),
+            HeaderActive         = fade(accent, 0.58),
+            CheckMark            = light,
+            SliderGrab           = fade(light, 0.70),
+            SliderGrabActive     = light,
+            PlotHistogram        = fade(accent, 0.66),
+            ScrollbarBg          = { 0, 0, 0, 0.30 },
+            ScrollbarGrab        = fade(accent, 0.55),
+            ScrollbarGrabHovered = fade(accent, 0.80),
+            ScrollbarGrabActive  = light,
+            TableHeaderBg        = inset,
+            TableBorderStrong    = fade(accent, 0.45),
+            TableBorderLight     = fade(accent, 0.25),
+            -- Alternate rows only lift the art a touch: a solid fill would paint stripes across it.
+            TableRowBgAlt        = { 1, 1, 1, 0.03 },
+        },
+        vars = {
+            FramePadding     = { 8, 5 },
+            ItemSpacing      = { 8, 6 },
+            GrabRounding     = 2.0,
+            ScrollbarSize    = 12.0,
+            -- The frame comes from the art.
+            WindowBorderSize = 0.0,
+        },
+        skin    = window_type,
+        -- Text is drawn the way the game draws its own: a dark outline and a slightly heavier stroke.
+        outline = true,
+    };
+end
+
+-- In the order the settings panel lists them. Phoenix comes first and is the starting theme.
+ui.THEMES = {
+    { key = 'phoenix', label = 'Phoenix' },
+    { key = 'classic', label = 'Classic' },
+    { key = 'neutral', label = 'Neutral' },
+};
+ui.STARTING_THEME = 'phoenix';
+
+local BUILDERS = { phoenix = phoenix_theme, classic = classic_theme, neutral = neutral_theme };
+
+-- Matches a theme by key or label, ignoring case.
+function ui.find_theme(text)
+    local wanted = (text or ''):lower();
+    for _, theme in ipairs(ui.THEMES) do
+        if (theme.key == wanted or theme.label:lower() == wanted) then
+            return theme.key;
+        end
+    end
+    return nil;
+end
+
+function ui.theme_label(key)
+    for _, theme in ipairs(ui.THEMES) do
+        if (theme.key == key) then
+            return theme.label;
+        end
+    end
+    return ui.THEMES[1].label;
+end
+
+-- The game art is drawn by skin.lua, which needs Ashita's Direct3D bindings. It is loaded the first
+-- time Classic is picked, and Classic keeps its flat colours if it can't load.
+local skin_module = nil;
+
+local function skin()
+    if (skin_module == nil) then
+        local ok, loaded = pcall(require, 'skin');
+        skin_module = ok and loaded or false;
+    end
+    return skin_module or nil;
+end
+
+ui.COLOR = T{ clear = { 0, 0, 0, 0 } };
+
+local COLOR   = ui.COLOR;
+local current = { key = nil, window_type = nil, theme = nil };
+
+-- Applies a theme, refilling ui.COLOR in place. pinned_type is a Window Type (0-7) for Classic to
+-- keep, or -1 to follow the game. Cheap to call every frame: it only refills when something changed.
+function ui.apply_theme(key, pinned_type)
+    key = BUILDERS[key] and key or ui.STARTING_THEME;
+
+    local window_type = nil;
+    if (key == 'classic') then
+        local module = skin();
+        if (module) then
+            window_type = module.window_type(pinned_type);
+        elseif (pinned_type and pinned_type >= 0 and pinned_type <= 7) then
+            window_type = pinned_type;
+        else
+            window_type = 0;
+        end
+    end
+    if (current.key == key and current.window_type == window_type) then
+        return current.theme;
+    end
+
+    local theme = BUILDERS[key](window_type);
+    for name, color in pairs(theme.palette) do
+        COLOR[name] = color;
+    end
+    current.key         = key;
+    current.window_type = window_type;
+    current.theme       = theme;
+    return theme;
+end
+
+-----------------------------------
+-- The game's own font
+-----------------------------------
+-- Classic draws plain text in the game's own font, read from the player's install by skin.lua: each
+-- letter is cut from the font sheet (16 x 16 cells, the outline already drawn in) and drawn at its own
+-- width, tinted with the text colour. It's a bitmap that only looks right at its own size, so it's
+-- used when the window is at scale 1 and the text is the normal size; anything else uses the normal
+-- font with an outline.
+local CELL  = 16;
+local GAP   = 1;    -- pixels between letters, as the game spaces its chat
+local SPACE = 4;    -- the width of a space
+
+local frame = { scale = 1, base = nil, game_font = true };
+
+local function plain(text)
+    return type(text) == 'string' and not text:find('[^\32-\126]');
+end
+
+-- Call once a frame, before any window is drawn: the window's scale, and whether Classic may use
+-- the game font.
+function ui.begin_frame(scale, game_font)
+    frame.scale     = scale;
+    frame.game_font = game_font ~= false;
+    frame.base      = nil;
+end
+
+-- Call right after imgui.Begin for each of the addon's windows, before pushing any font, and
+-- ui.window_ended before imgui.End. The font size there is the window's own, which is what the game
+-- font stands in for. It used to be read before any window began, but other addons can leave ImGui
+-- at another size between windows (one did when targeting), and the font flickered between the two.
+function ui.window_begun()
+    frame.base = imgui.GetFontSize();
+end
+
+function ui.window_ended()
+    frame.base = nil;
+end
+
+-- The game font, when it should draw text at the current size; otherwise nil.
+local function game_font()
+    local theme = current.theme;
+    if (not theme or not theme.outline or not frame.game_font or frame.scale ~= 1) then
+        return nil;
+    end
+    -- Inside a window, only at the window's own size: not in text pushed larger, like the daily count.
+    -- Outside one (measuring, or naming a window before it begins) nothing of ours has been pushed.
+    if (frame.base ~= nil and math.abs(imgui.GetFontSize() - frame.base) > 0.01) then
+        return nil;
+    end
+    local module = skin();
+    return module and module.font and module.font() or nil;
+end
+
+-- The gap only goes between letters, so centred and right-aligned text lands on the exact middle or
+-- edge rather than a pixel short of it.
+local function game_width(font, text)
+    local width = 0;
+    local glyph = nil;
+    for index = 1, #text do
+        glyph = font.glyphs[text:byte(index)];
+        width = width + (glyph and (glyph.width + GAP) or SPACE);
+    end
+    if (glyph) then
+        width = width - GAP;
+    end
+    return width;
+end
+
+-- The game font's own dark edge is only a shadow on the right and bottom, so over the lighter art
+-- the top and left of each letter faded out. A dark copy one pixel out each way rings every letter.
+local RING       = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 }, { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } };
+local RING_ALPHA = 0.9;
+
+-- A dark edge only helps light text. Dark text (a label on a bright banner) is drawn without one,
+-- or the letters and their edge run together.
+local function wants_edge(color)
+    return 0.299 * color[1] + 0.587 * color[2] + 0.114 * color[3] >= 0.45;
+end
+
+-- Draws the letters on whole pixels, centred in the line, as the game draws its own.
+local function draw_game_text(list, font, x, y, color, text)
+    local x0   = math.floor(x + 0.5);
+    local y0   = math.floor(y + (imgui.GetTextLineHeight() - CELL) / 2 + 0.5);
+    local fill = imgui.GetColorU32(color);
+    local dark = imgui.GetColorU32({ 0, 0, 0, RING_ALPHA * (color[4] or 1) });
+    -- Every ring first, so one letter's ring never covers the letter before it.
+    for pass = wants_edge(color) and 1 or 2, 2 do
+        local left = x0;
+        for index = 1, #text do
+            local code  = text:byte(index);
+            local glyph = font.glyphs[code];
+            if (glyph) then
+                local cell = code - 0x20;
+                local u    = (cell % 64) * CELL + glyph.left;
+                local v    = math.floor(cell / 64) * CELL;
+                local uv0  = { u / font.width, v / font.height };
+                local uv1  = { (u + glyph.width) / font.width, (v + CELL) / font.height };
+                if (pass == 1) then
+                    for _, offset in ipairs(RING) do
+                        local ox, oy = left + offset[1], y0 + offset[2];
+                        list:AddImage(font.id, { ox, oy }, { ox + glyph.width, oy + CELL }, uv0, uv1, dark);
+                    end
+                else
+                    list:AddImage(font.id, { left, y0 }, { left + glyph.width, y0 + CELL }, uv0, uv1, fill);
+                end
+                left = left + glyph.width + GAP;
+            else
+                left = left + SPACE;
+            end
+        end
+    end
+end
+
+-- How far the game digits overlap (they lean, and their outlines touch), the room after them, and how
+-- far down the line beside them sits so its letters rest on the digits' baseline.
+local DIGIT_OVERLAP = 2;
+local DIGIT_AFTER   = 6;
+local DIGIT_DROP    = 9;
+
+-- Draws a large count: in the game's own italic digits under Classic with the game font, else in the
+-- given font at twice the size. Leaves the cursor on the same line for what follows it, and returns
+-- how far that should move down to sit on the count's baseline.
+function ui.big_number(color, text, font, font_size)
+    local game    = game_font();
+    local numbers = game and game.numbers;
+    if (numbers and text:match('^%d+$')) then
+        local list   = imgui.GetWindowDrawList();
+        local x, y   = ui.vec2(imgui.GetCursorScreenPos());
+        local height = numbers.bottom - numbers.top;
+        local left   = math.floor(x + 0.5);
+        local top    = math.floor(y + 0.5);
+        local tint   = imgui.GetColorU32(color);
+        for index = 1, #text do
+            local box = numbers.digits[text:sub(index, index)];
+            list:AddImage(numbers.id, { left, top }, { left + box[2] - box[1], top + height },
+                { box[1] / numbers.width, numbers.top / numbers.height }, { box[2] / numbers.width, numbers.bottom / numbers.height }, tint);
+            left = left + box[2] - box[1] - DIGIT_OVERLAP;
+        end
+        imgui.Dummy({ left + DIGIT_OVERLAP - x, height });
+        imgui.SameLine(0, DIGIT_AFTER);
+        return DIGIT_DROP - (imgui.GetTextLineHeight() - CELL) / 2;
+    end
+
+    local small = imgui.GetFontSize();
+    imgui.PushFont(font, font_size * 2.0);
+    local big = imgui.GetFontSize();
+    ui.text(color, text);
+    imgui.PopFont();
+    imgui.SameLine();
+    return (big - small) * 0.8;
+end
+
+-- True when the active theme is drawing the game's window art, so ImGui's own fill is hidden.
+local function art_showing()
+    local theme  = current.theme;
+    local module = theme and theme.skin and skin();
+    return module and module.get(theme.skin) ~= nil or false;
+end
+
+-- Paints the game's window art behind the window that was just begun, when Classic is showing.
+-- titled is whether the window has a title bar.
+function ui.draw_skin(titled, alpha)
+    local theme = current.theme;
+    if (theme and theme.skin and art_showing()) then
+        skin().draw(theme.skin, titled, alpha);
+    end
+end
+
+-- Frees the window art's textures, for unloading the addon.
+function ui.release_skin()
+    if (skin_module) then
+        skin_module.release();
+    end
+end
+
+ui.apply_theme(ui.STARTING_THEME);
 
 -----------------------------------
 -- Messages and time
@@ -64,6 +487,98 @@ function ui.seconds_until_reset()
     return 86400 - ((os.time() + ui.JST_OFFSET) % 86400);
 end
 
+-----------------------------------
+-- Active time
+-----------------------------------
+-- A session clock that only runs while you're doing the activity. It starts with an action (a cast,
+-- a dig, a gather) and keeps running until ACTIVE_GRACE seconds after the last one ends, so walking
+-- off, a town trip or being away doesn't count. An action that never reports its end stops counting
+-- after ACTIVE_LONGEST seconds.
+ui.ACTIVE_GRACE   = 30;
+ui.ACTIVE_LONGEST = 180;
+
+function ui.new_clock()
+    return { banked = 0, from = nil, stop_at = nil };
+end
+
+-- An action began. now defaults to os.time().
+function ui.clock_start(clock, now)
+    if (clock.held) then
+        return;
+    end
+    now = now or os.time();
+    if (clock.from ~= nil and now >= clock.stop_at) then
+        clock.banked = clock.banked + (clock.stop_at - clock.from);
+        clock.from   = nil;
+    end
+    clock.from    = clock.from or now;
+    clock.stop_at = now + ui.ACTIVE_LONGEST;
+end
+
+-- An action ended. For one with no separate end (a dig, a gather), call it right after clock_start.
+function ui.clock_finish(clock, now)
+    if (clock.held) then
+        return;
+    end
+    now = now or os.time();
+    if (clock.from == nil or now >= clock.stop_at) then
+        ui.clock_start(clock, now);
+    end
+    clock.stop_at = now + ui.ACTIVE_GRACE;
+end
+
+-- Seconds of active time so far, and whether the clock is paused.
+function ui.clock_seconds(clock, now)
+    now = now or os.time();
+    if (clock == nil or clock.from == nil) then
+        return clock and clock.banked or 0, true;
+    end
+    return clock.banked + (math.min(now, clock.stop_at) - clock.from), now >= clock.stop_at;
+end
+
+-- The Session grid's Active cell: the label (Active, or Paused once you've stopped) and the time.
+-- Once the daily limit is reached it just shows the time it took.
+function ui.active_cell(clock)
+    local seconds, paused = ui.clock_seconds(clock);
+    if (seconds <= 0) then
+        return 'Active', '-', nil;
+    end
+    if (clock.held) then
+        return 'Active', ui.duration(seconds), nil;
+    end
+    return paused and 'Paused' or 'Active', ui.duration(seconds), paused and COLOR.gold or nil;
+end
+
+-- Holds a session's clocks while held is true (the daily limit is reached, so there's nothing left
+-- to do until the reset), and lets them run again once it isn't. Total stops where Active does.
+-- The session keeps started (its first action), total (time banked) and clock.
+function ui.session_hold(session, held, now)
+    now = now or os.time();
+    local clock = session.clock;
+    if (held and not clock.held) then
+        local seconds = ui.clock_seconds(clock, now);
+        clock.banked, clock.from, clock.stop_at = seconds, nil, nil;
+        clock.held = true;
+        if (session.started) then
+            session.total   = (session.total or 0) + (now - session.started);
+            session.started = nil;
+        end
+    elseif (not held and clock.held) then
+        clock.held      = nil;
+        session.started = nil;
+    end
+end
+
+-- Seconds from the session's first action, stopping at the daily limit.
+function ui.session_total(session, now)
+    now = now or os.time();
+    local total = session.total or 0;
+    if (session.started and not session.clock.held) then
+        total = total + (now - session.started);
+    end
+    return total;
+end
+
 function ui.duration(seconds)
     seconds = math.max(0, math.floor(seconds));
     local hours   = math.floor(seconds / 3600);
@@ -82,10 +597,18 @@ function ui.vec2(a, b)
     if (type(a) == 'table') then
         return a.x or a[1], a.y or a[2];
     end
+    -- Style values such as FramePadding arrive as ImGui vector objects with x and y fields.
+    if (a ~= nil and type(a) ~= 'number') then
+        return a.x, a.y;
+    end
     return a, b;
 end
 
 function ui.text_width(text)
+    local font = plain(text) and game_font();
+    if (font) then
+        return game_width(font, text);
+    end
     local width = imgui.CalcTextSize(text);
     if (type(width) == 'table') then
         return width.x or width[1] or 0;
@@ -93,24 +616,319 @@ function ui.text_width(text)
     return width or 0;
 end
 
+-----------------------------------
+-- Game-style text
+-----------------------------------
+-- Themes with outline set (Classic) draw text the way the game draws its own: eight dark copies
+-- one pixel out on every side for the outline, then the text twice, 0.6 pixels apart, for a slightly
+-- heavier stroke. It uses the font ImGui already has; nothing is loaded into ImGui's font atlas.
+-- The idea comes from Reverie's phoenixchat. Text with characters outside plain ASCII, such as
+-- Japanese names, is drawn the normal way.
+local OUTLINE = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 }, { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } };
+local aligned_y = nil;
+
+local function outlined()
+    return current.theme ~= nil and current.theme.outline == true;
+end
+
+-- Draws text at a screen position: in the game font when it applies, else outlined when the theme
+-- asks for it. color is an RGBA table.
+function ui.add_text(list, x, y, color, text)
+    local game = plain(text) and game_font();
+    if (game) then
+        draw_game_text(list, game, x, y, color, text);
+        return;
+    end
+    local font  = imgui.GetFont();
+    local size  = imgui.GetFontSize();
+    local fill  = imgui.GetColorU32(color);
+    if (outlined() and wants_edge(color)) then
+        local reach = math.max(1, math.floor(size / 24 + 0.5));
+        local dark  = imgui.GetColorU32({ 0, 0, 0, color[4] or 1 });
+        for _, offset in ipairs(OUTLINE) do
+            list:AddText(font, size, { x + offset[1] * reach, y + offset[2] * reach }, dark, text);
+        end
+        list:AddText(font, size, { x + 0.6, y }, fill, text);
+    end
+    list:AddText(font, size, { x, y }, fill, text);
+end
+
+-- Use in place of imgui.AlignTextToFramePadding, so text on this line lines up with the buttons
+-- beside it under every theme.
+function ui.align_to_frame()
+    imgui.AlignTextToFramePadding();
+    local _, y = ui.vec2(imgui.GetCursorScreenPos());
+    aligned_y = y;
+end
+
+-- Use in place of imgui.TextColored.
+function ui.text(color, text)
+    if (not outlined() or not plain(text)) then
+        imgui.TextColored(color, text);
+        return;
+    end
+
+    local x, y   = ui.vec2(imgui.GetCursorScreenPos());
+    local height = imgui.GetTextLineHeight();
+    -- On a line lined up with buttons, text sits down by the frame padding, as ImGui's own does.
+    if (aligned_y ~= nil and math.abs(y - aligned_y) < 0.5) then
+        local _, pad = ui.vec2(imgui.GetStyle().FramePadding);
+        y      = y + pad;
+        height = imgui.GetFrameHeight();
+    end
+    ui.add_text(imgui.GetWindowDrawList(), x, y, color, text);
+    imgui.Dummy({ math.max(ui.text_width(text), 1), height });
+end
+
+-- Text that wraps before wrap_x (in window coordinates, as imgui.PushTextWrapPos takes).
+-- Splits text into the lines it takes up in `room` pixels, breaking between words as ImGui does.
+local function wrap_lines(text, room)
+    local lines = {};
+    local line  = '';
+    for word in text:gmatch('%S+') do
+        local longer = (line == '') and word or (line .. ' ' .. word);
+        if (line ~= '' and ui.text_width(longer) > room) then
+            lines[#lines + 1] = line;
+            line = word;
+        else
+            line = longer;
+        end
+    end
+    if (line ~= '') then
+        lines[#lines + 1] = line;
+    end
+    return lines;
+end
+
+-- Draws lines of text at the cursor and takes up `keep` lines of room (at least as many as drawn).
+local function draw_lines(color, lines, keep)
+    local x, y   = ui.vec2(imgui.GetCursorScreenPos());
+    local height = imgui.GetTextLineHeight();
+    local list   = imgui.GetWindowDrawList();
+    local widest = 1;
+    for index, piece in ipairs(lines) do
+        ui.add_text(list, x, y + (index - 1) * height, color, piece);
+        widest = math.max(widest, ui.text_width(piece));
+    end
+    imgui.Dummy({ widest, math.max(1, #lines, keep or 0) * height });
+end
+
+function ui.wrapped(color, text, wrap_x)
+    if (not outlined() or not plain(text)) then
+        imgui.PushTextWrapPos(wrap_x);
+        imgui.TextColored(color, text);
+        imgui.PopTextWrapPos();
+        return;
+    end
+
+    draw_lines(color, wrap_lines(text, wrap_x - imgui.GetCursorPosX()));
+end
+
+-- Like ui.wrapped, for a spot whose message changes as you play: it always takes up the room of the
+-- tallest message in `alike`, so the auto-sized window keeps its height when the message changes.
+function ui.wrapped_steady(color, text, wrap_x, alike)
+    local room = wrap_x - imgui.GetCursorPosX();
+    local keep = 1;
+    for _, other in ipairs(alike) do
+        keep = math.max(keep, #wrap_lines(other, room));
+    end
+    draw_lines(color, wrap_lines(text, room), keep);
+end
+
+-- The name to give imgui.Begin for a window with a title bar. When the title will be drawn in the
+-- game font, ImGui's own is left out. Either way the window's ID comes from id, after the ###.
+function ui.window_title(title, id)
+    if (plain(title) and outlined() and game_font()) then
+        return '###' .. id;
+    end
+    return title .. '###' .. id;
+end
+
+-- Draws the window's title in the game font, where ImGui would put it. Call right after imgui.Begin.
+function ui.draw_title(title)
+    if (not (plain(title) and outlined() and game_font())) then
+        return;
+    end
+    local x, y         = ui.vec2(imgui.GetWindowPos());
+    local width        = imgui.GetWindowWidth();
+    local pad_x, pad_y = ui.vec2(imgui.GetStyle().FramePadding);
+    local list         = imgui.GetWindowDrawList();
+    -- The title bar is outside the window's content, so it needs its own clip rectangle.
+    list:PushClipRect({ x, y }, { x + width, y + imgui.GetFrameHeight() }, false);
+    ui.add_text(list, x + pad_x, y + pad_y, COLOR.text, title);
+    list:PopClipRect();
+end
+
+-- Use in place of imgui.TableHeadersRow. Under an outlined theme each header keeps ImGui's look and
+-- behaviour but its name is drawn in the theme's text. Reads the names given to TableSetupColumn.
+function ui.table_headers()
+    local count = outlined() and imgui.TableGetColumnCount and imgui.TableGetColumnCount();
+    local names = {};
+    if (type(count) == 'number') then
+        for column = 0, count - 1 do
+            local name = imgui.TableGetColumnName(column);
+            if (type(name) ~= 'string') then
+                count = nil;
+                break;
+            end
+            names[column] = name;
+        end
+    end
+    if (type(count) ~= 'number') then
+        imgui.TableHeadersRow();
+        return;
+    end
+
+    imgui.TableNextRow(ImGuiTableRowFlags_Headers);
+    local list = imgui.GetWindowDrawList();
+    for column = 0, count - 1 do
+        if (imgui.TableSetColumnIndex(column) ~= false) then
+            local shown = names[column]:match('^(.-)##') or names[column];
+            local x, y  = ui.vec2(imgui.GetCursorScreenPos());
+            imgui.PushID(column);
+            imgui.TableHeader('##' .. names[column]);
+            imgui.PopID();
+            if (shown ~= '') then
+                ui.add_text(list, x, y, COLOR.text, shown);
+            end
+        end
+    end
+end
+
+-- Use in place of imgui.Button for a button whose label is only shown: under an outlined theme the
+-- label is drawn in the theme's text, centred as ImGui centres it. color is the label's colour, and
+-- outlined_color its colour under an outlined theme, if different.
+function ui.button(label, id, size, color, outlined_color)
+    if (outlined() and plain(label)) then
+        color = outlined_color or color;
+    end
+    if (not outlined() or not plain(label)) then
+        imgui.PushStyleColor(ImGuiCol_Text, color or COLOR.text);
+        local clicked = imgui.Button(label .. '##' .. id, size);
+        imgui.PopStyleColor(1);
+        return clicked;
+    end
+    local clicked = imgui.Button('##' .. id, size);
+    local x0, y0 = ui.vec2(imgui.GetItemRectMin());
+    local x1, y1 = ui.vec2(imgui.GetItemRectMax());
+    ui.add_text(imgui.GetWindowDrawList(), (x0 + x1 - ui.text_width(label)) / 2,
+        (y0 + y1 - imgui.GetTextLineHeight()) / 2, color or COLOR.text, label);
+    return clicked;
+end
+
+-- How wide a menu needs to be for these labels, with room for the tick a checked item shows.
+function ui.menu_width(labels)
+    local widest = 0;
+    for _, label in ipairs(labels) do
+        widest = math.max(widest, ui.text_width(label));
+    end
+    return widest + imgui.GetFontSize() + 12;
+end
+
+-- Use in place of imgui.MenuItem(label, nil, selected). width is ui.menu_width of the menu's labels,
+-- so every item's highlight spans the menu. Under an outlined theme the label and the tick are drawn
+-- in the theme's style.
+function ui.menu_item(label, selected, width)
+    if (not outlined() or not plain(label)) then
+        return imgui.MenuItem(label, nil, selected);
+    end
+    local x, y    = ui.vec2(imgui.GetCursorScreenPos());
+    local clicked = imgui.Selectable('##menu_' .. label, false, 0, { width, 0 });
+    local list    = imgui.GetWindowDrawList();
+    ui.add_text(list, x, y, COLOR.text, label);
+    if (selected) then
+        -- A tick at the right of the item, as ImGui puts it, with a dark copy underneath like the text.
+        local size   = imgui.GetFontSize() * 0.75;
+        local left   = x + width - size - 2;
+        local top    = y + (imgui.GetTextLineHeight() - size) / 2;
+        local points = { { left + size * 0.15, top + size * 0.5 }, { left + size * 0.4, top + size * 0.78 }, { left + size * 0.88, top + size * 0.2 } };
+        for pass, colour in ipairs({ { 0, 0, 0, 0.9 }, COLOR.text }) do
+            local thickness = (pass == 1) and 4 or 2;
+            local packed    = imgui.GetColorU32(colour);
+            list:AddLine(points[1], points[2], packed, thickness);
+            list:AddLine(points[2], points[3], packed, thickness);
+        end
+    end
+    return clicked;
+end
+
+-- Use in place of imgui.SliderFloat: under an outlined theme the value is drawn in the theme's text.
+function ui.slider(id, buffer, low, high, format, flags)
+    if (not outlined()) then
+        return imgui.SliderFloat(id, buffer, low, high, format, flags);
+    end
+    local changed = imgui.SliderFloat(id, buffer, low, high, '', flags);
+    local value   = format:format(buffer[1]);
+    local x0, y0  = ui.vec2(imgui.GetItemRectMin());
+    local x1, y1  = ui.vec2(imgui.GetItemRectMax());
+    ui.add_text(imgui.GetWindowDrawList(), (x0 + x1 - ui.text_width(value)) / 2,
+        (y0 + y1 - imgui.GetTextLineHeight()) / 2, COLOR.text, value);
+    return changed;
+end
+
+-- Use in place of imgui.CollapsingHeader. Under an outlined theme ImGui draws the header with its
+-- text see-through, so it keeps the same ID (and open or closed state) but shows no label or arrow
+-- of its own; the arrow is drawn here the way ImGui draws it, and the label in the theme's text.
+function ui.header(label, flags)
+    if (not outlined() or not plain(label)) then
+        return imgui.CollapsingHeader(label, flags);
+    end
+
+    -- Where ImGui puts a framed header's arrow and label: from the cursor (the frame itself reaches a
+    -- little further left), inside the frame padding, the label past the arrow.
+    local x, y         = ui.vec2(imgui.GetCursorScreenPos());
+    local pad_x, pad_y = ui.vec2(imgui.GetStyle().FramePadding);
+    local size         = imgui.GetFontSize();
+    imgui.PushStyleColor(ImGuiCol_Text, COLOR.clear);
+    local open = imgui.CollapsingHeader(label, flags);
+    imgui.PopStyleColor(1);
+
+    -- ImGui's arrow: a triangle 0.4 of the font size from the centre of a font-sized square.
+    local list   = imgui.GetWindowDrawList();
+    local cx, cy = x + pad_x + size * 0.5, y + pad_y + size * 0.5;
+    local r      = size * 0.40;
+    local fill   = imgui.GetColorU32(COLOR.text);
+    if (open) then
+        list:AddTriangleFilled({ cx, cy + 0.75 * r }, { cx + 0.866 * r, cy - 0.75 * r }, { cx - 0.866 * r, cy - 0.75 * r }, fill);
+    else
+        list:AddTriangleFilled({ cx + 0.75 * r, cy }, { cx - 0.75 * r, cy + 0.866 * r }, { cx - 0.75 * r, cy - 0.866 * r }, fill);
+    end
+    ui.add_text(list, x + size + pad_x * 3, y + pad_y, COLOR.text, label);
+    return open;
+end
+
 function ui.right_text(width, color, text)
     imgui.SameLine(ui.PADDING + width - ui.text_width(text));
-    imgui.TextColored(color, text);
+    ui.text(color, text);
 end
 
 function ui.stat_cell(label, value, color)
     imgui.TableNextColumn();
-    imgui.TextColored(COLOR.muted, label);
-    imgui.TextColored(color or COLOR.text, value);
+    ui.text(COLOR.muted, label);
+    ui.text(color or COLOR.text, value);
 end
 
 function ui.toggle_button(label, on, width)
-    imgui.PushStyleColor(ImGuiCol_Button, on and COLOR.royal or COLOR.surface2);
-    imgui.PushStyleColor(ImGuiCol_ButtonHovered, on and COLOR.hover or COLOR.tint);
+    local off = (current.theme and current.theme.off_label) or COLOR.muted;
+    imgui.PushStyleColor(ImGuiCol_Button, on and COLOR.royal or COLOR.button);
+    imgui.PushStyleColor(ImGuiCol_ButtonHovered, on and COLOR.hover or COLOR.button_hover);
     imgui.PushStyleColor(ImGuiCol_ButtonActive, COLOR.royal);
-    imgui.PushStyleColor(ImGuiCol_Text, on and COLOR.text or COLOR.muted);
-    local clicked = imgui.Button(label, { width, 0 });
+    imgui.PushStyleColor(ImGuiCol_Text, on and COLOR.text or off);
+    local shown = label:match('^(.-)##') or label;
+    if (not outlined() or shown == '' or not plain(shown)) then
+        local clicked = imgui.Button(label, { width, 0 });
+        imgui.PopStyleColor(4);
+        return clicked;
+    end
+
+    -- The button draws no label of its own; the outlined one goes in its centre.
+    local clicked = imgui.Button('##' .. label, { width, 0 });
     imgui.PopStyleColor(4);
+    local x0, y0 = ui.vec2(imgui.GetItemRectMin());
+    local x1, y1 = ui.vec2(imgui.GetItemRectMax());
+    local x = (x0 + x1 - ui.text_width(shown)) / 2;
+    local y = (y0 + y1 - imgui.GetTextLineHeight()) / 2;
+    ui.add_text(imgui.GetWindowDrawList(), x, y, on and COLOR.text or off, shown);
     return clicked;
 end
 
@@ -141,8 +959,11 @@ end
 
 -- Returns how many colours and style vars were pushed, for the matching pops.
 function ui.push_theme(alpha)
+    -- Under Classic the art carries the window's opacity, so ImGui's own fill is switched off.
+    local fill = art_showing() and 0 or alpha;
+    local style = current.theme.style;
     local colors = {
-        { ImGuiCol_WindowBg,          { COLOR.abyss[1], COLOR.abyss[2], COLOR.abyss[3], alpha } },
+        { ImGuiCol_WindowBg,          { COLOR.abyss[1], COLOR.abyss[2], COLOR.abyss[3], fill } },
         { ImGuiCol_TitleBg,           COLOR.surface1 },
         { ImGuiCol_TitleBgActive,     COLOR.surface2 },
         { ImGuiCol_TitleBgCollapsed,  COLOR.surface1 },
@@ -176,14 +997,31 @@ function ui.push_theme(alpha)
     for _, color in ipairs(colors) do
         imgui.PushStyleColor(color[1], color[2]);
     end
+    -- A theme's own ImGui colours go on top. Names this ImGui build lacks are skipped.
+    local pushed = #colors;
+    for name, value in pairs(current.theme.imgui or {}) do
+        local enum = _G['ImGuiCol_' .. name];
+        if (enum ~= nil) then
+            imgui.PushStyleColor(enum, value);
+            pushed = pushed + 1;
+        end
+    end
 
-    imgui.PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0);
-    imgui.PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0);
+    imgui.PushStyleVar(ImGuiStyleVar_WindowRounding, style.window);
+    imgui.PushStyleVar(ImGuiStyleVar_FrameRounding, style.frame);
     imgui.PushStyleVar(ImGuiStyleVar_WindowPadding, { ui.PADDING, 10 });
     imgui.PushStyleVar(ImGuiStyleVar_ItemSpacing, { 8, 5 });
     imgui.PushStyleVar(ImGuiStyleVar_CellPadding, { 4, 3 });
+    local vars = 5;
+    for name, value in pairs(current.theme.vars or {}) do
+        local enum = _G['ImGuiStyleVar_' .. name];
+        if (enum ~= nil) then
+            imgui.PushStyleVar(enum, value);
+            vars = vars + 1;
+        end
+    end
 
-    return #colors, 5;
+    return pushed, vars;
 end
 
 -----------------------------------

@@ -21,10 +21,25 @@ end
 
 -- Wraps at the window edge, so a long note doesn't stretch the auto-sized window.
 local function note(width, color, text)
-    imgui.PushTextWrapPos(PADDING + width);
-    imgui.TextColored(color, text);
-    imgui.PopTextWrapPos();
+    ui.wrapped(color, text, PADDING + width);
 end
+
+-- For a note whose message changes as you gather: it keeps the room of the longest of `alike`, so
+-- the window doesn't grow and shrink each time it changes.
+local function steady_note(width, color, text, alike)
+    ui.wrapped_steady(color, text, PADDING + width, alike);
+end
+
+local WEATHER_NONE    = 'No harvesting points in this weather. They need rain or squalls.';
+local WEATHER_UNKNOWN = 'Weather unknown. Harvesting points need rain or squalls.';
+local WEATHER_GOOD    = 'Rain or squalls: harvesting points can appear.';
+local WEATHER_NOTES   = { WEATHER_NONE, WEATHER_UNKNOWN, WEATHER_GOOD };
+
+local SESSION_WAITING     = 'Waiting for %d finds to reach your inventory.';
+local SESSION_UNCONFIRMED = '%d finds weren\'t seen in your inventory, so they aren\'t counted.';
+local SESSION_IDLE        = 'Finds count once they reach your inventory.';
+-- Measured with a wide count, so a bigger number never needs more room than was kept.
+local SESSION_NOTES       = { SESSION_WAITING:fmt(999), SESSION_UNCONFIRMED:fmt(999), SESSION_IDLE };
 
 function helm.new(type_id)
     local definition = assert(helmdata.types[type_id], 'Unknown HELM type');
@@ -58,9 +73,9 @@ function helm.new(type_id)
     -----------------------------------
     local function info_line(label, value, color)
         local indent = math.max(ui.text_width('Zone:'), ui.text_width('Tool:')) + 8;
-        imgui.TextColored(COLOR.muted, label);
+        ui.text(COLOR.muted, label);
         imgui.SameLine(PADDING + indent);
-        imgui.TextColored(color, value);
+        ui.text(color, value);
     end
 
     local function draw_status(width, snapshot, pool)
@@ -79,11 +94,11 @@ function helm.new(type_id)
         end
         if (zone.weathers) then
             if (pool.weather_available == false) then
-                note(width, COLOR.gold, 'No harvesting points in this weather. They need rain or squalls.');
+                steady_note(width, COLOR.gold, WEATHER_NONE, WEATHER_NOTES);
             elseif (pool.weather_available == nil) then
-                note(width, COLOR.muted, 'Weather unknown. Harvesting points need rain or squalls.');
+                steady_note(width, COLOR.muted, WEATHER_UNKNOWN, WEATHER_NOTES);
             else
-                note(width, COLOR.secondary, 'Rain or squalls: harvesting points can appear.');
+                steady_note(width, COLOR.secondary, WEATHER_GOOD, WEATHER_NOTES);
             end
         end
         if (pool.low_level) then
@@ -97,22 +112,23 @@ function helm.new(type_id)
         local daily = snapshot.daily;
 
         imgui.Spacing();
-        imgui.TextColored(COLOR.muted, 'TODAY\'S FINDS');
-        imgui.PushFont(font, font_size * 2.0);
-        imgui.TextColored(COLOR.text, tostring(daily.finds));
-        imgui.PopFont();
+        ui.text(COLOR.muted, 'TODAY\'S FINDS');
+        ui.big_number(COLOR.text, tostring(daily.finds), font, font_size);
+        imgui.NewLine();
         ui.right_text(width, COLOR.muted, ('%d attempts'):fmt(daily.attempts));
         note(width, COLOR.faint, 'Today\'s totals reset at JST midnight.');
         imgui.Spacing();
     end
 
     local function draw_session(width, snapshot, pool)
-        if (not imgui.CollapsingHeader('Session', ImGuiTreeNodeFlags_DefaultOpen)) then
+        if (not ui.header('Session', ImGuiTreeNodeFlags_DefaultOpen)) then
             return;
         end
 
         local session  = snapshot.session;
-        local elapsed  = session.started and (os.time() - session.started) or 0;
+        -- Rates use active time, so time spent away from gathering doesn't drag them down.
+        local elapsed  = ui.clock_seconds(session.clock);
+        local total    = session.clock and ui.session_total(session) or 0;
         local hit_rate = session.attempts > 0 and percent(session.finds * 100 / session.attempts) or '-';
         local per_hour = elapsed >= 60 and ('%.0f'):fmt(session.finds * 3600 / elapsed) or '-';
         local expected = pool.known and percent(pool.obtain_rate) or '-';
@@ -126,18 +142,23 @@ function helm.new(type_id)
             ui.stat_cell('Hit rate', hit_rate);
             ui.stat_cell('Expected', expected);
             ui.stat_cell('Per hour', per_hour);
+            ui.stat_cell(ui.active_cell(session.clock));
+            ui.stat_cell('Total', total > 0 and ui.duration(total) or '-', COLOR.muted);
             imgui.EndTable();
         end
-        if (session.unconfirmed > 0) then
-            note(width, COLOR.gold, ('%d finds weren\'t seen in your inventory, so they aren\'t counted.'):fmt(session.unconfirmed));
-        end
+        -- A find waits a moment for its item after every gather, so this line is always here and only
+        -- its message changes. A line that came and went would resize the window each gather.
         if (snapshot.pending > 0) then
-            note(width, COLOR.muted, ('Waiting for %d finds to reach your inventory.'):fmt(snapshot.pending));
+            steady_note(width, COLOR.muted, SESSION_WAITING:fmt(snapshot.pending), SESSION_NOTES);
+        elseif (session.unconfirmed > 0) then
+            steady_note(width, COLOR.gold, SESSION_UNCONFIRMED:fmt(session.unconfirmed), SESSION_NOTES);
+        else
+            steady_note(width, COLOR.faint, SESSION_IDLE, SESSION_NOTES);
         end
     end
 
     local function draw_fatigue(width, scale, snapshot)
-        if (not imgui.CollapsingHeader('Rare-item Fatigue', ImGuiTreeNodeFlags_DefaultOpen)) then
+        if (not ui.header('Rare-item Fatigue', ImGuiTreeNodeFlags_DefaultOpen)) then
             return;
         end
         if (not snapshot.zone) then
@@ -149,7 +170,7 @@ function helm.new(type_id)
         local caps      = snapshot.fatigue.caps;
         local unknown   = false;
         if (depletion) then
-            imgui.TextColored(COLOR.muted, 'Rare finds here');
+            ui.text(COLOR.muted, 'Rare finds here');
             if (depletion.known) then
                 ui.right_text(width, COLOR.ember, ('%d / %d'):fmt(depletion.count, depletion.max));
                 imgui.PushStyleColor(ImGuiCol_PlotHistogram, COLOR.royal);
@@ -180,15 +201,15 @@ function helm.new(type_id)
             if (imgui.BeginTable('##helm_' .. M.key .. '_caps', 2, flags, { width, 0 })) then
                 imgui.TableSetupColumn('Capped item', ImGuiTableColumnFlags_WidthStretch, 0, 0);
                 imgui.TableSetupColumn('Found', ImGuiTableColumnFlags_WidthFixed, ui.text_width('Unknown') + 8 * scale, 0);
-                imgui.TableHeadersRow();
+                ui.table_headers();
                 for _, id in ipairs(cap_ids) do
                     local cap = caps[id];
                     unknown = unknown or not cap.known;
                     imgui.TableNextRow();
                     imgui.TableNextColumn();
-                    imgui.TextColored(COLOR.secondary, item_name(id));
+                    ui.text(COLOR.secondary, item_name(id));
                     imgui.TableNextColumn();
-                    imgui.TextColored(cap.known and COLOR.text or COLOR.gold, cap.known and ('%d / %d'):fmt(cap.count, cap.limit) or 'Unknown');
+                    ui.text(cap.known and COLOR.text or COLOR.gold, cap.known and ('%d / %d'):fmt(cap.count, cap.limit) or 'Unknown');
                 end
                 imgui.EndTable();
             end
@@ -209,7 +230,7 @@ function helm.new(type_id)
     end
 
     local function draw_pool(width, scale, pool)
-        if (not imgui.CollapsingHeader('Possible Finds', ImGuiTreeNodeFlags_DefaultOpen)) then
+        if (not ui.header('Possible Finds', ImGuiTreeNodeFlags_DefaultOpen)) then
             return;
         end
         if (not pool.known) then
@@ -232,17 +253,17 @@ function helm.new(type_id)
                 imgui.TableSetupColumn('Fresh', ImGuiTableColumnFlags_WidthFixed, odds_width, 0);
             end
             imgui.TableSetupColumn(tracks_fatigue and 'Now' or 'Odds', ImGuiTableColumnFlags_WidthFixed, odds_width, 0);
-            imgui.TableHeadersRow();
+            ui.table_headers();
             for _, row in ipairs(pool.rows) do
                 imgui.TableNextRow();
                 imgui.TableNextColumn();
-                imgui.TextColored(row.affected and COLOR.peach or COLOR.secondary, item_name(row.id));
+                ui.text(row.affected and COLOR.peach or COLOR.secondary, item_name(row.id));
                 if (tracks_fatigue) then
                     imgui.TableNextColumn();
-                    imgui.TextColored(COLOR.muted, percent(row.base_odds));
+                    ui.text(COLOR.muted, percent(row.base_odds));
                 end
                 imgui.TableNextColumn();
-                imgui.TextColored(row.odds ~= nil and COLOR.text or COLOR.gold, percent(row.odds));
+                ui.text(row.odds ~= nil and COLOR.text or COLOR.gold, percent(row.odds));
             end
             imgui.EndTable();
         end
@@ -257,7 +278,7 @@ function helm.new(type_id)
     end
 
     local function draw_items(width, scale, snapshot)
-        if (not imgui.CollapsingHeader('Today\'s Items', ImGuiTreeNodeFlags_DefaultOpen)) then
+        if (not ui.header('Today\'s Items', ImGuiTreeNodeFlags_DefaultOpen)) then
             return;
         end
 
@@ -286,13 +307,13 @@ function helm.new(type_id)
             if (imgui.BeginTable('##helm_' .. M.key .. '_items', 2, flags, size)) then
                 imgui.TableSetupColumn('Item', ImGuiTableColumnFlags_WidthStretch, 0, 0);
                 imgui.TableSetupColumn('Qty', ImGuiTableColumnFlags_WidthFixed, 44 * scale, 0);
-                imgui.TableHeadersRow();
+                ui.table_headers();
                 for _, row in ipairs(rows) do
                     imgui.TableNextRow();
                     imgui.TableNextColumn();
-                    imgui.TextColored(COLOR.secondary, row.name);
+                    ui.text(COLOR.secondary, row.name);
                     imgui.TableNextColumn();
-                    imgui.TextColored(COLOR.text, tostring(row.quantity));
+                    ui.text(COLOR.text, tostring(row.quantity));
                 end
                 imgui.EndTable();
             end

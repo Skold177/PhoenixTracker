@@ -120,6 +120,8 @@ function M.new(type_id)
         if (daily.day ~= ui.jst_day()) then
             daily = counters(ui.jst_day());
             save();
+            -- A new day is a new session, as in the other tabs.
+            session = counters();
         end
     end
 
@@ -371,6 +373,9 @@ function M.new(type_id)
         end
 
         session.started = session.started or os.time();
+        session.clock   = session.clock or ui.new_clock();
+        ui.clock_start(session.clock);
+        ui.clock_finish(session.clock);
         local attempt = { item = ui.u32(e.data, 0x08), zone = zid, day = daily.day, at = now,
             reset_at = os.time() + ui.seconds_until_reset() };
         add('attempts');

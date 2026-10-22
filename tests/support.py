@@ -247,7 +247,13 @@ end }, fs = { exists = function() return true end }, memory = {
 } }
 ICON_FA_GEAR = 'Gear'
 local function noop() end
-local draw_list = setmetatable({}, { __index = function() return noop end })
+-- Text drawn straight onto a window (the outlined game-style text) is recorded, one entry per copy.
+drawn_text = {}
+drawn_images = {}
+local draw_list = setmetatable({
+    AddText = function(_, _, _, _, _, text) if text then drawn_text[#drawn_text + 1] = text end end,
+    AddImage = function(_, id) drawn_images[#drawn_images + 1] = id end,
+}, { __index = function() return noop end })
 -- Text is 7px a character at the default 16px font and follows the pushed font size, as ImGui's does.
 local font_sizes = { 16 }
 local imgui = setmetatable({
@@ -265,10 +271,14 @@ local imgui = setmetatable({
     GetItemRectMin = function() return 0, 0 end,
     GetItemRectMax = function() return 100, 20 end,
     GetWindowPos = function() return 60, 300 end,
+    GetWindowWidth = function() return 400 end,
     GetTextLineHeight = function() return 16 end,
     GetTextLineHeightWithSpacing = function() return 20 end,
     GetCursorPosY = function() return 0 end,
     GetCursorScreenPos = function() return 0, 0 end,
+    GetCursorPosX = function() return 12 end,
+    GetFrameHeight = function() return 22 end,
+    GetStyle = function() return { FramePadding = { x = 4, y = 3 } } end,
     GetWindowDrawList = function() return draw_list end,
     GetColorU32 = function() return 0 end,
     TextColored = function(_, text) _capture_text(text) end,

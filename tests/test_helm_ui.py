@@ -84,7 +84,7 @@ class HelmTabTests(unittest.TestCase):
         self.assertEqual(cells['Finds'], '0')
         self.assertEqual(cells['Nothing'], '1')
         self.assertEqual(cells['Broken'], '1')
-        self.assertEqual(list(cells), ['Attempts', 'Finds', 'Nothing', 'Broken', 'Hit rate', 'Expected', 'Per hour'])
+        self.assertEqual(list(cells), ['Attempts', 'Finds', 'Nothing', 'Broken', 'Hit rate', 'Expected', 'Per hour', 'Active', 'Total'])
         self.assertEqual(h.activities, ['harvest'])
 
     def test_pool_command_and_session_reset_are_scoped_to_the_tab(self):
@@ -94,6 +94,37 @@ class HelmTabTests(unittest.TestCase):
         self.assertTrue(h.command('reset', prefix='/pexcavate'))
         self.assertIn('Excavation session stats cleared.', h.messages)
         self.assertFalse(h.command('account', ['other'], '/pexcavate'))
+
+    def layout(self, h):
+        """What the tab takes up: each reserved block's height and the lines ImGui laid out."""
+        h.lua.execute("dummies = {}; require('imgui').Dummy = function(size) dummies[#dummies + 1] = size[2] end")
+        h.draw()
+        return (list(h.lua.globals().dummies.values()), len(h.text))
+
+    def gather(self, h, item, sequence):
+        zone = h.load('helmdata').types[4].zones[62]
+        npc, event = next(iter(zone.npcs.items()))
+        h.packet(0x034, packet(52, u16={2: sequence, 0x2A: 62, 0x2C: event}, u32={4: npc, 8: item}))
+
+    def award(self, h, item, count):
+        h.packet(0x020, packet(u32={4: count}, u16={12: item}, u8={14: 0, 15: 1}))
+        h.state.inventory[0] = h.table({1: {'Id': item, 'Count': count}})
+
+    def test_a_find_waiting_for_its_item_does_not_resize_the_window(self):
+        h = self.tab('mining', 62)
+        self.gather(h, 739, 1)
+        self.award(h, 739, 1)
+        settled = self.layout(h)
+
+        self.gather(h, 739, 2)
+        h.lua.execute('drawn_text = {}')
+        waiting = self.layout(h)
+        shown = list(h.lua.globals().drawn_text.values()) + h.text
+        self.assertIn('Waiting for 1 finds to reach your inventory.', shown)
+        self.assertEqual(waiting, settled)
+
+        self.award(h, 739, 2)
+        self.assertEqual(self.layout(h), settled)
 
 
 if __name__ == '__main__':

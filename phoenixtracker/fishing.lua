@@ -168,6 +168,7 @@ local function new_session()
         points   = 0,
         skill    = 0,
         outcomes = T{},
+        clock    = ui.new_clock(),
     };
 end
 
@@ -390,6 +391,14 @@ local function tick()
         pf.daily           = fresh_day();
         pf.limit_announced = false;
         save_daily();
+        -- A new day is a new session: the limit, the timers and the rates all start over together.
+        -- A cast still in the air finishes in the new one.
+        pf.session = new_session();
+        pf.cast    = nil;
+    end
+    -- Nothing bites past the limit, so the session's time stops there until the reset.
+    if (pf.daily) then
+        ui.session_hold(pf.session, pf.daily.points >= DAILY_LIMIT);
     end
 end
 
@@ -426,6 +435,7 @@ local function record_outcome(outcome, final)
     cast.outcome   = outcome;
     cast.final     = final;
     cast.ending_at = nil;
+    ui.clock_finish(session.clock);
     return true;
 end
 
@@ -435,12 +445,15 @@ local function begin_cast()
     end
     pf.cast = T{ started = os.time() };
     pf.hook = nil;
+    pf.session.started = pf.session.started or pf.cast.started;
+    ui.clock_start(pf.session.clock);
 end
 
 local function end_cast()
     local cast = pf.cast;
     if (cast and not cast.outcome and not cast.ending_at) then
         cast.ending_at = os.clock();
+        ui.clock_finish(pf.session.clock);
     end
     pf.hook = nil;
 end
@@ -500,16 +513,16 @@ end
 
 local function gear_line(label, name, count)
     local indent = math.max(text_width('Rod:'), text_width('Bait:')) + 8;
-    imgui.TextColored(COLOR.muted, label);
+    ui.text(COLOR.muted, label);
     imgui.SameLine(PADDING + indent);
     if (not name) then
-        imgui.TextColored(COLOR.danger, 'None');
+        ui.text(COLOR.danger, 'None');
         return;
     end
-    imgui.TextColored(COLOR.secondary, name);
+    ui.text(COLOR.secondary, name);
     if (count) then
         imgui.SameLine();
-        imgui.TextColored(COLOR.peach, count);
+        ui.text(COLOR.peach, count);
     end
 end
 
@@ -553,7 +566,7 @@ end
 
 local function draw_break_mode(width)
     local button_width = (width - 8) / 2;
-    imgui.TextColored(COLOR.muted, 'Warn on');
+    ui.text(COLOR.muted, 'Warn on');
     for index, mode in ipairs(BREAK_MODES) do
         if (index > 1) then
             imgui.SameLine();
@@ -571,7 +584,7 @@ local function draw_hook(width, scale)
         return;
     end
 
-    imgui.TextColored(COLOR.ember, HOOKS[hook.message].name);
+    ui.text(COLOR.ember, HOOKS[hook.message].name);
     right_text(width, COLOR.muted, hook.pool.area or 'Area unknown');
 
     local label, color = catch_verdict(hook);
@@ -580,15 +593,15 @@ local function draw_hook(width, scale)
         imgui.PushStyleColor(ImGuiCol_Button, color);
         imgui.PushStyleColor(ImGuiCol_ButtonHovered, color);
         imgui.PushStyleColor(ImGuiCol_ButtonActive, color);
-        imgui.PushStyleColor(ImGuiCol_Text, COLOR.abyss);
-        imgui.Button(label .. '##pf_verdict', { width, imgui.GetTextLineHeight() + 6 * scale });
-        imgui.PopStyleColor(4);
+        -- Dark text on the banner, except under Classic, where it's the game's white outlined text.
+        ui.button(label, 'pf_verdict', { width, imgui.GetTextLineHeight() + 6 * scale }, COLOR.abyss, COLOR.text);
+        imgui.PopStyleColor(3);
     end
     imgui.Spacing();
 
     local rows = hook.pool[hook.message];
     if (#rows == 0) then
-        imgui.TextColored(COLOR.faint, pool_empty_reason(hook.pool, hook.message));
+        ui.text(COLOR.faint, pool_empty_reason(hook.pool, hook.message));
         return;
     end
 
@@ -603,15 +616,15 @@ local function draw_hook(width, scale)
         imgui.TableSetupColumn('Could be', ImGuiTableColumnFlags_WidthStretch, 0, 0);
         imgui.TableSetupColumn('Skill', ImGuiTableColumnFlags_WidthFixed, text_width('Skill') + 4 * scale, 0);
         imgui.TableSetupColumn('Odds', ImGuiTableColumnFlags_WidthFixed, math.max(text_width('Odds'), text_width('100%'), text_width('quest')) + 4 * scale, 0);
-        imgui.TableHeadersRow();
+        ui.table_headers();
         for _, row in ipairs(rows) do
             imgui.TableNextRow();
             imgui.TableNextColumn();
-            imgui.TextColored(row.legendary and COLOR.gold or COLOR.secondary, row.name);
+            ui.text(row.legendary and COLOR.gold or COLOR.secondary, row.name);
             imgui.TableNextColumn();
-            imgui.TextColored(COLOR.muted, row.skill and tostring(row.skill) or '-');
+            ui.text(COLOR.muted, row.skill and tostring(row.skill) or '-');
             imgui.TableNextColumn();
-            imgui.TextColored(row.odds and COLOR.text or COLOR.faint, pool_value(row));
+            ui.text(row.odds and COLOR.text or COLOR.faint, pool_value(row));
         end
         imgui.EndTable();
     end
@@ -622,16 +635,11 @@ local function draw_daily(width, scale, font, font_size)
     local done  = daily.points >= DAILY_LIMIT;
 
     imgui.Spacing();
-    imgui.TextColored(COLOR.muted, 'DAILY CATCHES');
+    ui.text(COLOR.muted, 'DAILY CATCHES');
 
-    imgui.PushFont(font, font_size * 2.0);
-    local big = imgui.GetFontSize();
-    imgui.TextColored(done and COLOR.success or COLOR.text, tostring(daily.points));
-    imgui.PopFont();
-    local small = imgui.GetFontSize();
-    imgui.SameLine();
-    imgui.SetCursorPosY(imgui.GetCursorPosY() + (big - small) * 0.8);
-    imgui.TextColored(COLOR.muted, ('/ %d'):fmt(DAILY_LIMIT));
+    local drop = ui.big_number(done and COLOR.success or COLOR.text, tostring(daily.points), font, font_size);
+    imgui.SetCursorPosY(imgui.GetCursorPosY() + drop);
+    ui.text(COLOR.muted, ('/ %d'):fmt(DAILY_LIMIT));
     right_text(width, COLOR.ember, ('%d%%'):fmt(math.floor(math.min(daily.points, DAILY_LIMIT) * 100 / DAILY_LIMIT)));
 
     imgui.PushStyleColor(ImGuiCol_PlotHistogram, done and COLOR.success or COLOR.royal);
@@ -639,23 +647,25 @@ local function draw_daily(width, scale, font, font_size)
     imgui.PopStyleColor(1);
 
     local reset_in = seconds_until_reset();
-    imgui.TextColored(COLOR.secondary, ('%d left'):fmt(math.max(0, DAILY_LIMIT - daily.points)));
+    ui.text(COLOR.secondary, ('%d left'):fmt(math.max(0, DAILY_LIMIT - daily.points)));
     right_text(width, COLOR.muted, ('resets %s (%s)'):fmt(os.date('%H:%M', os.time() + reset_in), duration(reset_in)));
 
     if (done) then
-        imgui.TextColored(COLOR.gold, 'Limit reached. Nothing bites until the reset.');
+        ui.text(COLOR.gold, 'Limit reached. Nothing bites until the reset.');
     end
     imgui.Spacing();
 end
 
 local function draw_session(width)
-    if (not imgui.CollapsingHeader('Session', ImGuiTreeNodeFlags_DefaultOpen)) then
+    if (not ui.header('Session', ImGuiTreeNodeFlags_DefaultOpen)) then
         return;
     end
 
     local session = pf.session;
     local caught  = session.outcomes.caught or 0;
-    local elapsed = session.started and (os.time() - session.started) or 0;
+    -- Rates use active time, so time spent away from the water doesn't drag them down.
+    local elapsed = ui.clock_seconds(session.clock);
+    local total   = ui.session_total(session);
 
     local hit_rate = '-';
     if (session.casts > 0) then
@@ -687,6 +697,8 @@ local function draw_session(width)
         stat_cell(('To %d'):fmt(DAILY_LIMIT), to_limit);
         stat_cell('Skill', skill and tostring(skill) or '-');
         stat_cell('Gained', ('+%.1f'):fmt(session.skill), gain_color);
+        stat_cell(ui.active_cell(session.clock));
+        stat_cell('Total', total > 0 and duration(total) or '-', COLOR.muted);
         imgui.EndTable();
     end
 end
@@ -721,18 +733,18 @@ local function draw_toggles(id, width, buttons, key, on_enable)
 end
 
 local function draw_vibrate(width)
-    if (not imgui.CollapsingHeader('Vibrate on Hook', ImGuiTreeNodeFlags_DefaultOpen)) then
+    if (not ui.header('Vibrate on Hook', ImGuiTreeNodeFlags_DefaultOpen)) then
         return;
     end
 
     draw_toggles('vibrate', width, VIBRATE_BUTTONS, 'setting', vibrate);
     if (pf.no_controller) then
-        imgui.TextColored(COLOR.muted, 'No USB DualSense or XInput pad found.');
+        ui.text(COLOR.muted, 'No USB DualSense or XInput pad found.');
     end
 end
 
 local function draw_wanted(width)
-    if (not imgui.CollapsingHeader('On Hook Display', ImGuiTreeNodeFlags_DefaultOpen)) then
+    if (not ui.header('On Hook Display', ImGuiTreeNodeFlags_DefaultOpen)) then
         return;
     end
 
@@ -741,7 +753,7 @@ local function draw_wanted(width)
 end
 
 local function draw_catches(width, scale)
-    if (not imgui.CollapsingHeader('Today\'s Catch', ImGuiTreeNodeFlags_DefaultOpen)) then
+    if (not ui.header('Today\'s Catch', ImGuiTreeNodeFlags_DefaultOpen)) then
         return;
     end
 
@@ -751,7 +763,7 @@ local function draw_catches(width, scale)
     end
 
     if (#rows == 0) then
-        imgui.TextColored(COLOR.faint, 'Nothing landed yet today.');
+        ui.text(COLOR.faint, 'Nothing landed yet today.');
         return;
     end
 
@@ -772,19 +784,19 @@ local function draw_catches(width, scale)
     if (imgui.BeginTable('##pf_catches', 2, flags, size)) then
         imgui.TableSetupColumn('Item', ImGuiTableColumnFlags_WidthStretch, 0, 0);
         imgui.TableSetupColumn('Qty', ImGuiTableColumnFlags_WidthFixed, 44 * scale, 0);
-        imgui.TableHeadersRow();
+        ui.table_headers();
         for _, row in ipairs(rows) do
             imgui.TableNextRow();
             imgui.TableNextColumn();
             if (FREE_ITEMS[row.id]) then
-                imgui.TextColored(COLOR.muted, row.name);
+                ui.text(COLOR.muted, row.name);
                 imgui.SameLine();
-                imgui.TextColored(COLOR.faint, 'no point');
+                ui.text(COLOR.faint, 'no point');
             else
-                imgui.TextColored(COLOR.secondary, row.name);
+                ui.text(COLOR.secondary, row.name);
             end
             imgui.TableNextColumn();
-            imgui.TextColored(COLOR.text, tostring(row.quantity));
+            ui.text(COLOR.text, tostring(row.quantity));
         end
         imgui.EndTable();
     end
@@ -837,11 +849,14 @@ local function render_hook(scale, width)
 
     local flags = bit.bor(ui.window_flags(ctx.settings.locked), ImGuiWindowFlags_NoTitleBar, ImGuiWindowFlags_NoFocusOnAppearing);
     if (imgui.Begin('On the Line##phoenixfishtrack_hook', true, flags)) then
+        ui.window_begun();
+        ui.draw_skin(false, ctx.settings.alpha);
         imgui.PushFont(imgui.GetFont(), imgui.GetFontSize() * scale);
         draw_hook(width, scale);
         remember_position('hook_x', 'hook_y');
         imgui.PopFont();
     end
+    ui.window_ended();
     imgui.End();
 end
 
